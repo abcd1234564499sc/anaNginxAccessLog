@@ -6,14 +6,33 @@ import re
 import openpyxl as oxl
 
 import myUtils
+from ExportExcellUtils import ExportExcellUtils
+import warnings
+warnings.filterwarnings("ignore")
 
-header = ["源IP", "客户端用户名1", "客户端用户名2", "访问时间", "请求类型", "请求地址(URI)", "协议版本", "响应码", "请求包大小", "数据", "refer信息",
-          "user-agent"]
-logFiles = [r"test.log"]
-obj = re.compile(
-    r'(?P<ip>.*?) (?P<username1>.*?) (?P<username2>.*?) \[(?P<time>.*?)\] "(?P<reqtype>.*?) (?P<request>.*?) (?P<requestPro>.*?)" (?P<status>.*?) (?P<bytes>.*?) (?P<data>.*?) "(?P<referer>.*?)" "(?P<ua>.*?)"')
-objErr = re.compile(
-    r'(?P<ip>.*?) (?P<username1>.*?) (?P<username2>.*?) \[(?P<time>.*?)\] "(?P<reqtype>.*?) ?(?P<request>.*) ?(?P<requestPro>.*?)" (?P<status>.*?) (?P<bytes>.*?) (?P<data>.*?) "(?P<referer>.*?)" "(?P<ua>.*?)"')
+headerDict = {}
+headerDict["ip"] = "源IP"
+# headerDict["username1"] = "客户端用户名1"
+# headerDict["username2"] = "客户端用户名2"
+headerDict["time"] = "访问时间"
+headerDict["reqtype"] = "请求类型"
+headerDict["request"] = "请求地址(URI)"
+# headerDict["requestPro"] = "协议版本"
+headerDict["status"] = "响应码"
+headerDict["bytes"] = "请求包大小"
+headerDict["data"] = "请求数据"
+headerDict["referer"] = "refer信息"
+headerDict["ua"] = "user-agent"
+
+# 分析的日志后缀名
+solveSuffixs=[]
+solveSuffixs.append(".log")
+
+# 匹配单行日志的正则表达式
+anaLogRegStrList = []
+anaLogRegStrList.append(r'(?P<ip>.*?) (?P<username1>.*?) (?P<username2>.*?) \[(?P<time>.*?)\] "(?P<reqtype>.*?) (?P<request>/.*?) (?P<requestPro>HTTP/\d\.\d)" (?P<status>\d+?) (?P<bytes>\d+?) "(?P<data>.*?)" "(?P<referer>.*?)" "(?P<ua>.*?)"')
+anaLogRegStrList.append(r'(?P<ip>.*?) (?P<username1>.*?) (?P<username2>.*?) \[(?P<time>.*?)\] "(?P<reqtype>.*?) (?P<request>/.*?) (?P<requestPro>HTTP/\d\.\d)" (?P<status>\d+) (?P<bytes>\d+) "(?P<data>.*?)" "(?P<ua>.*?)"')
+anaLogRegStrList.append(r'(?P<ip>.*?) (?P<username1>.*?) (?P<username2>.*?) \[(?P<time>.*?)\] "(?P<reqtype>.*?) (?P<request>/.*?) (?P<requestPro>HTTP/\d\.\d)" (?P<status>\d+) (?P<bytes>\d+)')
 
 
 def load_log(path):
@@ -28,7 +47,7 @@ def load_log(path):
         line = line.strip()
         if line == "":
             continue
-        tmpResult = parse(line)
+        tmpResult = parseLogLine(line)
         if tmpResult == "":
             errorResultList.append({"index": rowIndex + 1, "content": line})
             continue
@@ -37,35 +56,46 @@ def load_log(path):
     return resultLine, errorResultList
 
 
-def parse(line):
-    # 解析单行nginx日志
-    try:
-        result = obj.match(line).groups()
-    except:
+def parseLogLine(line):
+    # 解析单行日志
+    result = ""
+    for tmpAnaLogStr in anaLogRegStrList:
+        reObj = re.compile(tmpAnaLogStr)
         try:
-            result = objErr.match(line).groups()
+            result = reObj.match(line).groupdict()
+            break
         except:
-            result = ""
+            continue
     return result
 
 
-def writeExcell(ws, resultList, notAlignColIndexArr=[]):
-    for rowIndex, result in enumerate(resultList):
-        print("\r正在导出{0}/{1}行".format(rowIndex + 1, len(resultList)), end="")
-        myUtils.writeExcellCell(ws, rowIndex + 2, 1, rowIndex + 1, 0, True)
-        for headerIndex, headerText in enumerate(header):
-            ifAlign = True
-            if headerIndex + 1 in notAlignColIndexArr:
-                ifAlign = False
-            else:
-                ifAlign = True
-            myUtils.writeExcellCell(ws, rowIndex + 2, headerIndex + 2,
-                                    result[headerIndex] if result[headerIndex] != "" else "-", 0, ifAlign)
-        myUtils.writeExcellSpaceCell(ws, rowIndex + 2, len(header) + 2)
-    print()
+def solvedLogResults(resultList):
+    showHeaderList = []
+    useKeyList = []
+    solvedResultList = []
+    if len(resultList)!=0:
+        firstResultDict =  resultList[0]
+        useKeyList = [tmpKey for tmpKey in firstResultDict.keys() if tmpKey in headerDict.keys()]
+        showHeaderList = [headerDict[tmpUseKey] for tmpUseKey in useKeyList]
+    else:
+        pass
+    for tmpResultDict in resultList:
+        tmpLineList = []
+        for tmpUseKey in useKeyList:
+            tmpLineList.append(tmpResultDict[tmpUseKey])
+        solvedResultList.append(tmpLineList)
+    return showHeaderList,solvedResultList
 
 
 if __name__ == '__main__':
+    logFolder = input("请输入想分析的日志所在的文件夹：")
+    logFiles = []
+    fileNames = os.listdir(logFolder)
+    for tmpFileName in fileNames:
+        tmpSuffix = os.path.splitext(tmpFileName)[1]
+        if tmpSuffix in solveSuffixs:
+            logFiles.append(os.path.join(logFolder, tmpFileName))
+    exportExcellUtils = ExportExcellUtils(saveCount=10000)
     for fileIndex, nowFile in enumerate(logFiles):
         print("---------------------------------------------------")
         fileName = os.path.split(nowFile)[1]
@@ -74,23 +104,19 @@ if __name__ == '__main__':
         resultLine, errorLineList = load_log(nowFile)
         print("解析完成")
 
-        excellFileName = fileName + ".xlsx"
-        # 创建一个excell文件对象
-        wb = oxl.Workbook()
-        # 创建URL扫描结果子表
-        ws = wb.active
-        ws.title = fileName
-        print("开始导出文件")
-        myUtils.writeExcellHead(ws, ["序号"] + header)
-        notAlignColIndexArr = [6, 10, 11, 12]  # 写入excell默认居中，该数组定义不居中的列序号，序号从0开始
-        writeExcell(ws, resultLine, notAlignColIndexArr=notAlignColIndexArr)
-        # 设置列宽
-        colWidthArr = [7, 17, 17, 17, 30, 10, 70, 10, 10, 15, 40, 80, 80]
-        myUtils.setExcellColWidth(ws, colWidthArr)
-        # 设置冻结
-        ws.freeze_panes="C2"
-        myUtils.saveExcell(wb, excellFileName)
-        print("成功导出文件：{}".format(excellFileName))
+        # 根据获得结果动态生成表头
+        showHeaderList,solvedResultsList = solvedLogResults(resultLine)
+
+
+        # 添加一个excell文件对象
+        nowExcellFileObj = exportExcellUtils.addFile(fileName)
+        nowExcellSheetObj = nowExcellFileObj.getFinalSheet()
+        nowExcellSheetObj.sheetName = fileName
+        nowExcellSheetObj.setHeaderList(exportExcellUtils.transformListToHeaderList(showHeaderList))
+        nowExcellSheetObj.addRows([exportExcellUtils.transformListToCellList(tmpResults) for tmpResults in solvedResultsList])
+
+        exportExcellUtils.exportExcell(fileIndex)
+
         if len(errorLineList) != 0:
             print("导出异常行数据")
             errorFileName = "error-{0}-{1}.txt".format(fileName, myUtils.getNowSeconed())
